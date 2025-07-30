@@ -77,9 +77,12 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
             
             if status_col_18 == 'No' and line_no_col_22 == line_number:
                 overall_results_found = True
+                barcode_value = cells[1].get_text(strip=True)
+                
                 results_html += "<hr>"
                 results_html += f"<p><b>SL No:</b> {cells[0].get_text(strip=True)}</p>"
-                results_html += f"<p><b>Barcode No:</b> {cells[1].get_text(strip=True)}</p>"
+                # Barcode No value is now larger and bold
+                results_html += f"<p><b>Barcode No:</b> <span style='font-size: 1.2em; font-weight: bold;'>{barcode_value}</span></p>"
                 results_html += f"<p><b>Size:</b> {cells[3].get_text(strip=True)}</p>"
                 results_html += f"<p><b>Bundle Qty:</b> {cells[22].get_text(strip=True)}</p>"
                 results_html += f"<p><b>Input Date:</b> {cells[16].get_text(strip=True)}</p>"
@@ -271,7 +274,7 @@ COLOR_SELECTION_TEMPLATE = """
 </html>
 """
 
-# Page for displaying results
+# Page for displaying results with Print functionality
 RESULT_TEMPLATE = """
 <!doctype html>
 <html>
@@ -302,21 +305,63 @@ RESULT_TEMPLATE = """
         color: #34495e;
         line-height: 1.6;
     }
-    a {
-        display: block;
+    .action-buttons {
+        margin-top: 25px;
+        display: flex;
+        justify-content: center;
+        gap: 15px;
+    }
+    .action-buttons a, .action-buttons button {
+        display: inline-block;
         text-align: center;
-        margin-top: 20px;
-        color: #3498db;
+        color: #ffffff;
         text-decoration: none;
         font-weight: 600;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+        transition: transform 0.2s;
+    }
+    .try-again-link {
+        background-color: #3498db;
+    }
+    .print-button {
+        background-color: #9b59b6;
+    }
+    .action-buttons a:hover, .action-buttons button:hover {
+        transform: translateY(-2px);
+    }
+    /* Print Specific Styles */
+    @media print {
+        body * {
+            visibility: hidden;
+        }
+        #printable-area, #printable-area * {
+            visibility: visible;
+        }
+        #printable-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+        }
+        .result-container h1 { /* Optional: show title in print */
+            visibility: visible;
+        }
     }
 </style>
 </head>
 <body>
-    <div class="result-container">
+    <div class="result-container" id="result-page">
         <h1>Report (Filtered)</h1>
-        <div>{{ content | safe }}</div>
-        <a href="/">Try Again</a>
+        <div id="printable-area">
+            {{ content | safe }}
+        </div>
+        <div class="action-buttons">
+            <a href="/" class="try-again-link">Try Again</a>
+            <button onclick="window.print()" class="print-button">&#128424;&#65039; Print</button>
+        </div>
     </div>
 </body>
 </html>
