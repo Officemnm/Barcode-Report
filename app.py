@@ -67,7 +67,7 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
     if not report_rows:
         return "<p>No data found in the report.</p>"
 
-    # NEW: Vertical card layout for results
+    # Vertical card layout for results
     results_html = '<div class="report-grid">'
     overall_results_found = False
     for row in report_rows:
@@ -118,7 +118,6 @@ INPUT_PAGE_TEMPLATE = """
     input[type="text"]:focus { outline: none; border-color: #3498db; box-shadow: 0 0 8px rgba(52, 152, 219, 0.25); }
     input[type="submit"] { width: 100%; padding: 12px 15px; font-size: 16px; font-weight: 700; color: #ffffff; background: linear-gradient(to right, #3498db, #2980b9); border: none; border-radius: 8px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
     input[type="submit"]:hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15); }
-    /* NEW: Loader Styles */
     #loader-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255, 255, 255, 0.8); z-index: 9999; display: none; justify-content: center; align-items: center; }
     .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -126,7 +125,6 @@ INPUT_PAGE_TEMPLATE = """
 </head>
 <body>
     <div id="loader-overlay"><div class="loader"></div></div>
-
     <div class="form-container">
         <h1>Final Report Generator</h1>
         <form action="/get-colors" method="post">
@@ -165,7 +163,6 @@ COLOR_SELECTION_TEMPLATE = """
     input[type="submit"] { width: 100%; padding: 12px 15px; font-size: 16px; font-weight: 700; color: #ffffff; background: linear-gradient(to right, #27ae60, #229954); border: none; border-radius: 8px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
     input[type="submit"]:hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15); }
     a { display: block; text-align: center; margin-top: 20px; color: #3498db; text-decoration: none; }
-    /* NEW: Loader Styles */
     #loader-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255, 255, 255, 0.8); z-index: 9999; display: none; justify-content: center; align-items: center; }
     .loader { border: 8px solid #f3f3f3; border-top: 8px solid #27ae60; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -173,7 +170,6 @@ COLOR_SELECTION_TEMPLATE = """
 </head>
 <body>
     <div id="loader-overlay"><div class="loader"></div></div>
-
     <div class="form-container">
         <h1>Select a Color</h1>
         <form action="/generate-report" method="post">
@@ -209,12 +205,18 @@ RESULT_TEMPLATE = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #ffffff; margin: 0; padding: 15px; }
-    .result-container { max-width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px; }
+    .result-container { max-width: 800px; margin: 0 auto; padding: 20px; }
     .result-container h1 { font-size: 24px; color: #2c3e50; text-align: center; margin-bottom: 20px; }
-    /* NEW: Result Card Styles */
-    .report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; }
-    .report-card-group { border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-    .report-item-card { padding: 10px 15px; border-bottom: 1px solid #eee; }
+    
+    .report-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    .report-card-group { 
+        /* UPDATED: More prominent border */
+        border: 1px solid #d1d1d1; 
+        border-radius: 8px; 
+        overflow: hidden; 
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05); 
+    }
+    .report-item-card { padding: 10px 15px; border-bottom: 1px solid #e9e9e9; }
     .report-card-group .report-item-card:last-child { border-bottom: none; }
     .report-label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; margin-bottom: 4px; }
     .report-value { font-size: 18px; color: #2c3e50; font-weight: 500; }
@@ -224,11 +226,40 @@ RESULT_TEMPLATE = """
     .try-again-link { background-color: #3498db; }
     .print-button { background-color: #9b59b6; }
     .action-buttons a:hover, .action-buttons button:hover { transform: translateY(-2px); }
-    /* Print Specific Styles */
+    
+    /* UPDATED: Print Specific Styles for Table Layout */
     @media print {
-        body, .result-container { border: none; box-shadow: none; }
-        .action-buttons { display: none; }
-        .report-grid { grid-template-columns: 1fr; } /* Stack cards vertically for printing */
+        body, #result-page, .report-card-group {
+            box-shadow: none;
+            border: none;
+        }
+        .action-buttons, .result-container h1 {
+            display: none;
+        }
+        #printable-area {
+            /* This is where the magic happens */
+        }
+        .report-card-group {
+            display: table;
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px; /* Space between tables if multiple results */
+            page-break-inside: avoid;
+        }
+        .report-item-card {
+            display: table-row;
+        }
+        .report-label, .report-value {
+            display: table-cell;
+            padding: 8px;
+            border: 1px solid #888;
+            text-align: left;
+            font-size: 12pt;
+        }
+        .report-label {
+            font-weight: bold;
+            width: 35%;
+        }
     }
 </style>
 </head>
