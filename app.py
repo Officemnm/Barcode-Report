@@ -90,20 +90,84 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
     return results_html
 
 # --- HTML Templates for web pages ---
+
 # First page: For getting ref number input
 INPUT_PAGE_TEMPLATE = """
 <!doctype html>
 <html>
-<head><title>Report Generator</title></head>
+<head>
+<title>Report Generator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #ffffff;
+        margin: 0;
+        padding: 15px;
+    }
+    .form-container {
+        max-width: 400px;
+        margin: 0 auto;
+    }
+    .form-container h1 {
+        font-size: 24px;
+        color: #2c3e50;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    label {
+        display: block;
+        font-weight: 600;
+        color: #34495e;
+        margin-bottom: 8px;
+    }
+    input[type="text"] {
+        width: 100%;
+        padding: 12px 15px;
+        font-size: 16px;
+        border: 1px solid #bdc3c7;
+        border-radius: 8px;
+        box-sizing: border-box;
+        margin-bottom: 20px;
+        transition: border-color 0.3s, box-shadow 0.3s;
+    }
+    input[type="text"]:focus {
+        outline: none;
+        border-color: #3498db;
+        box-shadow: 0 0 8px rgba(52, 152, 219, 0.25);
+    }
+    input[type="submit"] {
+        width: 100%;
+        padding: 12px 15px;
+        font-size: 16px;
+        font-weight: 700;
+        color: #ffffff;
+        background: linear-gradient(to right, #3498db, #2980b9);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    }
+    input[type="submit"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15);
+    }
+</style>
+</head>
 <body>
-    <h1>Final Report Generator</h1>
-    <form action="/get-colors" method="post">
-        <label for="ref_number">Please provide the ref number for API 1:</label><br>
-        <input type="text" id="ref_number" name="ref_number" required><br><br>
-        <label for="line_number">Please provide the line number:</label><br>
-        <input type="text" id="line_number" name="line_number" required><br><br>
-        <input type="submit" value="Get Color List">
-    </form>
+    <div class="form-container">
+        <h1>Final Report Generator</h1>
+        <form action="/get-colors" method="post">
+            <label for="ref_number">Please provide the ref number for API 1:</label>
+            <input type="text" id="ref_number" name="ref_number" required>
+            
+            <label for="line_number">Please provide the line number:</label>
+            <input type="text" id="line_number" name="line_number" required>
+            
+            <input type="submit" value="Get Color List">
+        </form>
+    </div>
 </body>
 </html>
 """
@@ -112,24 +176,97 @@ INPUT_PAGE_TEMPLATE = """
 COLOR_SELECTION_TEMPLATE = """
 <!doctype html>
 <html>
-<head><title>Select Color</title></head>
+<head>
+<title>Select Color</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #ffffff;
+        margin: 0;
+        padding: 15px;
+    }
+    .form-container {
+        max-width: 400px;
+        margin: 0 auto;
+    }
+    .form-container h1 {
+        font-size: 24px;
+        color: #2c3e50;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    label {
+        display: block;
+        font-weight: 600;
+        color: #34495e;
+        margin-bottom: 8px;
+    }
+    select {
+        width: 100%;
+        padding: 12px 15px;
+        font-size: 16px;
+        border: 1px solid #bdc3c7;
+        border-radius: 8px;
+        box-sizing: border-box;
+        margin-bottom: 20px;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2334495e%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22/%3E%3C/svg%3E');
+        background-repeat: no-repeat;
+        background-position: right 15px top 50%;
+        background-size: .65em auto;
+    }
+    select:focus {
+        outline: none;
+        border-color: #3498db;
+        box-shadow: 0 0 8px rgba(52, 152, 219, 0.25);
+    }
+    input[type="submit"] {
+        width: 100%;
+        padding: 12px 15px;
+        font-size: 16px;
+        font-weight: 700;
+        color: #ffffff;
+        background: linear-gradient(to right, #27ae60, #229954);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    }
+    input[type="submit"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15);
+    }
+    a {
+        display: block;
+        text-align: center;
+        margin-top: 20px;
+        color: #3498db;
+        text-decoration: none;
+    }
+</style>
+</head>
 <body>
-    <h1>Please select a color</h1>
-    <form action="/generate-report" method="post">
-        <input type="hidden" name="ref_number" value="{{ ref_number }}">
-        <input type="hidden" name="line_number" value="{{ line_number }}">
-        
-        <label for="color_id">Color:</label>
-        <select name="color_id" id="color_id">
-            {% for color in colors %}
-            <option value="{{ color.id }}">{{ color.name }}</option>
-            {% endfor %}
-        </select>
-        <br><br>
-        <input type="submit" value="Generate Report">
-    </form>
-    <br>
-    <a href="/">Go Back</a>
+    <div class="form-container">
+        <h1>Select a Color</h1>
+        <form action="/generate-report" method="post">
+            <input type="hidden" name="ref_number" value="{{ ref_number }}">
+            <input type="hidden" name="line_number" value="{{ line_number }}">
+            
+            <label for="color_id">Color:</label>
+            <select name="color_id" id="color_id">
+                {% for color in colors %}
+                <option value="{{ color.id }}">{{ color.name }}</option>
+                {% endfor %}
+            </select>
+            
+            <input type="submit" value="Generate Report">
+        </form>
+        <a href="/">Go Back</a>
+    </div>
 </body>
 </html>
 """
@@ -138,12 +275,49 @@ COLOR_SELECTION_TEMPLATE = """
 RESULT_TEMPLATE = """
 <!doctype html>
 <html>
-<head><title>Report Result</title></head>
+<head>
+<title>Report Result</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #ffffff;
+        margin: 0;
+        padding: 15px;
+    }
+    .result-container {
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 20px;
+        border: 1px solid #eee;
+        border-radius: 8px;
+    }
+    .result-container h1 {
+        font-size: 24px;
+        color: #2c3e50;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    .result-container p {
+        color: #34495e;
+        line-height: 1.6;
+    }
+    a {
+        display: block;
+        text-align: center;
+        margin-top: 20px;
+        color: #3498db;
+        text-decoration: none;
+        font-weight: 600;
+    }
+</style>
+</head>
 <body>
-    <h1>Report (Filtered)</h1>
-    <div>{{ content | safe }}</div>
-    <br>
-    <a href="/">Try Again</a>
+    <div class="result-container">
+        <h1>Report (Filtered)</h1>
+        <div>{{ content | safe }}</div>
+        <a href="/">Try Again</a>
+    </div>
 </body>
 </html>
 """
@@ -225,4 +399,4 @@ def generate_report():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=10000, debug=True)
