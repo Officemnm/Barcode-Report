@@ -25,7 +25,7 @@ def perform_login():
     }
     session = requests.Session()
     try:
-        login_response = session.post(LOGIN_URL, data=login_payload, timeout=20)
+        login_response = session.post(LOGIN_URL, data=login_payload, timeout=120)
         login_response.raise_for_status()
         if "logout" not in login_response.text.lower():
             return None, "Login failed. Please check if the username or password is correct."
@@ -46,7 +46,7 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
     try:
         api1_url = "https://logic-job-no.onrender.com/get_info"
         params1 = {'ref': ref_number}
-        response1 = session.get(api1_url, params=params1, timeout=30)
+        response1 = session.get(api1_url, params=params1, timeout=120)
         response1.raise_for_status()
         data1 = response1.json()
         job_no = data1.get("job_no")
