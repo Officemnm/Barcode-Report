@@ -40,7 +40,7 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
     try:
         api1_url = "https://logic-job-no.onrender.com/get_info"
         params1 = {'ref': ref_number}
-        response1 = session.get(api1_url, params=params1, timeout=30)
+        response1 = session.get(api1_url, params=params1, timeout=200)
         response1.raise_for_status()
         data1 = response1.json()
         job_no = data1.get("job_no")
@@ -66,7 +66,7 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
             'txt_bunle_no': '', 'txt_date_from': '', 'txt_date_to': '', 'txt_job_id': txt_job_id,
             'txt_color_name': selected_color_id, 'type': '2'
         }
-        response4 = session.post(api2_base_url, data=post_data, timeout=300)
+        response4 = session.post(api2_base_url, data=post_data, timeout=500)
         response4.raise_for_status()
         soup4 = BeautifulSoup(response4.text, 'html.parser')
         report_rows = soup4.find_all('tr', id=lambda x: x and x.startswith('tr_'))
