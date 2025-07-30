@@ -46,7 +46,7 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
     try:
         api1_url = "https://logic-job-no.onrender.com/get_info"
         params1 = {'ref': ref_number}
-        response1 = session.get(api1_url, params=params1, timeout=120)
+        response1 = session.get(api1_url, params=params1, timeout=130)
         response1.raise_for_status()
         data1 = response1.json()
         job_no = data1.get("job_no")
@@ -111,7 +111,6 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
             try:
                 if status_col_18 == 'No' and int(line_no_col_22_str) == int(line_number):
                     overall_results_found = True
-                    # ... (rest of the loop is the same)
                     sl_no = cells[0].get_text(strip=True)
                     barcode_value = cells[1].get_text(strip=True)
                     size_value = cells[3].get_text(strip=True)
@@ -145,7 +144,46 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
 # --- HTML Templates and Flask Routes ---
 
 INPUT_PAGE_TEMPLATE = """
-<!doctype html><html><head><title>Report Generator</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background-color:#fff;margin:0;padding:15px}.form-container{max-width:400px;margin:0 auto}h1{font-size:24px;color:#2c3e50;text-align:center;margin-bottom:20px}label{display:block;font-weight:600;color:#34495e;margin-bottom:8px}input[type=text]{width:100%;padding:12px 15px;font-size:16px;border:1px solid #bdc3c7;border-radius:8px;box-sizing:border-box;margin-bottom:20px;transition:border-color .3s,box-shadow .3s}input[type=text]:focus{outline:0;border-color:#3498db;box-shadow:0 0 8px rgba(52,152,219,.25)}input[type=submit]{width:100%;padding:12px 15px;font-size:16px;font-weight:700;color:#fff;background:linear-gradient(to right,#3498db,#2980b9);border:none;border-radius:8px;cursor:pointer;transition:transform .2s,box-shadow .2s;box-shadow:0 4px 10px rgba(0,0,0,.1)}input[type=submit]:hover{transform:translateY(-2px);box-shadow:0 6px 15px rgba(0,0,0,.15)}#loader-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background-color:rgba(255,255,255,.8);z-index:9999;display:none;justify-content:center;align-items:center}.loader{border:8px solid #f3f3f3;border-top:8px solid #3498db;border-radius:50%;width:60px;height:60px;animation:spin 1s linear infinite}@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></head><body><div id="loader-overlay"><div class=loader></div></div><div class=form-container><h1>Final Report Generator</h1><form action=/get-colors method=post><label for=ref_number>Please provide the ref number for API 1:</label><input type=text id=ref_number name=ref_number required><label for=line_number>Please provide the line number:</label><input type=text id=line_number name=line_number required><input type=submit value="Get Color List"></form></div><script>document.querySelector("form").addEventListener("submit",function(){document.getElementById("loader-overlay").style.display="flex"})</script></body></html>
+<!doctype html>
+<html>
+<head>
+<title>Report Generator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #ffffff; margin: 0; padding: 15px; }
+    .form-container { max-width: 400px; margin: 0 auto; }
+    h1 { font-size: 24px; color: #2c3e50; text-align: center; margin-bottom: 20px; }
+    label { display: block; font-weight: 600; color: #34495e; margin-bottom: 8px; }
+    input[type="text"] { width: 100%; padding: 12px 15px; font-size: 16px; border: 1px solid #bdc3c7; border-radius: 8px; box-sizing: border-box; margin-bottom: 20px; transition: border-color 0.3s, box-shadow 0.3s; }
+    input[type="text"]:focus { outline: none; border-color: #3498db; box-shadow: 0 0 8px rgba(52, 152, 219, 0.25); }
+    input[type="submit"] { width: 100%; padding: 12px 15px; font-size: 16px; font-weight: 700; color: #ffffff; background: linear-gradient(to right, #3498db, #2980b9); border: none; border-radius: 8px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
+    input[type="submit"]:hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15); }
+    #loader-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255, 255, 255, 0.8); z-index: 9999; display: none; justify-content: center; align-items: center; }
+    .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+    <div id="loader-overlay"><div class="loader"></div></div>
+    <div class="form-container">
+        <h1>Final Report Generator</h1>
+        <form action="/get-colors" method="post">
+            <label for="ref_number">IB/BOOKIN NO</label>
+            <input type="text" id="ref_number" name="ref_number" required>
+            
+            <label for="line_number">LINE NO</label>
+            <input type="text" id="line_number" name="line_number" required>
+            
+            <input type="submit" value="Get Color List">
+        </form>
+    </div>
+    <script>
+        document.querySelector('form').addEventListener('submit', function() {
+            document.getElementById('loader-overlay').style.display = 'flex';
+        });
+    </script>
+</body>
+</html>
 """
 
 COLOR_SELECTION_TEMPLATE = """
@@ -153,83 +191,7 @@ COLOR_SELECTION_TEMPLATE = """
 """
 
 RESULT_TEMPLATE = """
-<!doctype html>
-<html>
-<head>
-<title>Report Result</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #ffffff; margin: 0; padding: 15px; }
-    .result-container { max-width: 800px; margin: 0 auto; padding: 20px; }
-    h1 { font-size: 24px; color: #2c3e50; text-align: center; margin-bottom: 20px; }
-    .report-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
-    
-    /* --- NEW: Green Glow Effect --- */
-    .report-card-group {
-        border: 1px solid #27ae60; /* Solid green border */
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: 0 0 12px rgba(46, 204, 113, 0.5); /* Green glow effect */
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-    .report-card-group:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 20px rgba(46, 204, 113, 0.6);
-    }
-    /* --- End of New Styles --- */
-
-    .report-item-card { padding: 10px 15px; border-bottom: 1px solid #e9e9e9; background-color: #fff; }
-    .report-card-group .report-item-card:last-child { border-bottom: none; }
-    .report-label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; margin-bottom: 4px; }
-    .report-value { font-size: 18px; color: #2c3e50; font-weight: 500; }
-    .action-buttons { margin-top: 25px; display: flex; justify-content: center; gap: 15px; }
-    .action-buttons a, .action-buttons button { display: inline-block; text-align: center; color: #ffffff; text-decoration: none; font-weight: 600; padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; transition: transform 0.2s; }
-    .try-again-link { background-color: #3498db; }
-    .print-button { background-color: #9b59b6; }
-    .action-buttons a:hover, .action-buttons button:hover { transform: translateY(-2px); }
-    .print-only { display: none; }
-    @media print {
-        body { margin: 1cm; }
-        .result-container h1, .report-grid, .action-buttons { display: none; }
-        .print-only { display: block; }
-        .print-only h1 { display: block; text-align: center; font-size: 16pt; margin-bottom: 20px; }
-        .print-only table { width: 100%; border-collapse: collapse; font-size: 11pt; }
-        .print-only th, .print-only td { border: 1px solid #333; padding: 8px; text-align: left; }
-        .print-only th { background-color: #f2f2f2; font-weight: 700; }
-    }
-</style>
-</head>
-<body>
-    <div class="result-container">
-        <h1>Report (Filtered)</h1>
-        {% if content.error %}
-            <p style="text-align:center;color:red">{{ content.error | safe }}</p>
-        {% else %}
-            <div class="report-grid">{{ content.screen_html | safe }}</div>
-            <div class="print-only">
-                <h1>Report Data</h1>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Input Date</th>
-                            <th>Barcode No</th>
-                            <th>Size</th>
-                            <th>Bundle Qty</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{ content.print_html | safe }}
-                    </tbody>
-                </table>
-            </div>
-        {% endif %}
-        <div class="action-buttons">
-            <a href="/" class="try-again-link">Try Again</a>
-            <button onclick="window.print()" class="print-button">&#128424;&#65039; Print</button>
-        </div>
-    </div>
-</body>
-</html>
+<!doctype html><html><head><title>Report Result</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background-color:#fff;margin:0;padding:15px}.result-container{max-width:800px;margin:0 auto;padding:20px}h1{font-size:24px;color:#2c3e50;text-align:center;margin-bottom:20px}.report-grid{display:grid;grid-template-columns:1fr;gap:20px}.report-card-group{border:1px solid #27ae60;border-radius:8px;overflow:hidden;box-shadow:0 0 12px rgba(46,204,113,.5);transition:transform .2s,box-shadow .2s}.report-card-group:hover{transform:translateY(-3px);box-shadow:0 4px 20px rgba(46,204,113,.6)}.report-item-card{padding:10px 15px;border-bottom:1px solid #e9e9e9;background-color:#fff}.report-card-group .report-item-card:last-child{border-bottom:none}.report-label{font-size:12px;color:#7f8c8d;text-transform:uppercase;margin-bottom:4px}.report-value{font-size:18px;color:#2c3e50;font-weight:500}.action-buttons{margin-top:25px;display:flex;justify-content:center;gap:15px}.action-buttons a,.action-buttons button{display:inline-block;text-align:center;color:#fff;text-decoration:none;font-weight:600;padding:10px 20px;border-radius:8px;border:none;cursor:pointer;transition:transform .2s}.try-again-link{background-color:#3498db}.print-button{background-color:#9b59b6}.action-buttons a:hover,.action-buttons button:hover{transform:translateY(-2px)}.print-only{display:none}@media print{body{margin:1cm}.result-container h1,.report-grid,.action-buttons{display:none}.print-only{display:block}.print-only h1{display:block;text-align:center;font-size:16pt;margin-bottom:20px}.print-only table{width:100%;border-collapse:collapse;font-size:11pt}.print-only th,.print-only td{border:1px solid #333;padding:8px;text-align:left}.print-only th{background-color:#f2f2f2;font-weight:700}}</style></head><body><div class=result-container><h1>Report (Filtered)</h1>{% if content.error %}<p style="text-align:center;color:red">{{ content.error | safe }}</p>{% else %}<div class=report-grid>{{ content.screen_html | safe }}</div><div class=print-only><h1>Report Data</h1><table><thead><tr><th>Input Date</th><th>Barcode No</th><th>Size</th><th>Bundle Qty</th></tr></thead><tbody>{{ content.print_html | safe }}</tbody></table></div>{% endif %}<div class=action-buttons><a href=/ class=try-again-link>Try Again</a><button onclick=window.print() class=print-button>&#128424;&#65039; Print</button></div></div></body></html>
 """
 
 # --- Flask Routes ---
@@ -249,7 +211,7 @@ def get_colors():
     try:
         api1_url = "https://logic-job-no.onrender.com/get_info"
         params1 = {'ref': ref_number}
-        response1 = session.get(api1_url, params=params1, timeout=30)
+        response1 = session.get(api1_url, params=params1, timeout=300)
         response1.raise_for_status()
         data1 = response1.json()
         job_no = data1.get("job_no")
@@ -261,7 +223,7 @@ def get_colors():
 
         api2_base_url = "http://180.92.235.190:8022/erp/production/reports/requires/bundle_wise_sewing_tracking_report_controller.php"
         params2 = {'data': f"{company_id}**0**1**{last_five_digits}**0", 'action': 'search_list_view'}
-        response2 = session.get(api2_base_url, params=params2, timeout=120)
+        response2 = session.get(api2_base_url, params=params2, timeout=300)
         response2.raise_for_status()
         soup2 = BeautifulSoup(response2.text, PARSER)
         del response2
@@ -279,7 +241,7 @@ def get_colors():
             return render_template_string(RESULT_TEMPLATE, content={'error': "<p>Could not find 'txt_job_id'. The job might not exist or the page structure changed.</p>"})
 
         params3 = {'action': 'color_popup', 'txt_job_no': job_no, 'txt_job_id': txt_job_id}
-        response3 = session.get(api2_base_url, params=params3, timeout=120)
+        response3 = session.get(api2_base_url, params=params3, timeout=200)
         response3.raise_for_status()
         soup3 = BeautifulSoup(response3.text, PARSER)
         del response3
