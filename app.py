@@ -28,48 +28,61 @@ def perform_login():
 
 # --- Core logic that now accepts parameters ---
 def fetch_report_data(ref_number, line_number, selected_color_id):
-    """Generates the final report based on the provided inputs."""
+    """
+    Generates the final report based on the provided inputs.
+    Returns a dictionary with HTML for both on-screen and print views.
+    """
     session, login_message = perform_login()
     if not session:
-        return f"<p>{login_message}</p>"
+        return {'error': f"<p>{login_message}</p>"}
 
     # Step 1: First API
-    api1_url = "https://logic-job-no.onrender.com/get_info"
-    params1 = {'ref': ref_number}
-    response1 = session.get(api1_url, params=params1, timeout=30)
-    data1 = response1.json()
-    job_no = data1.get("job_no")
-    company_id = data1.get("company_id")
-    if not all([job_no, company_id]):
-        return "<p>Error: 'job_no' or 'company_id' not found from the first API.</p>"
-    last_five_digits = job_no[-5:]
+    try:
+        api1_url = "https://logic-job-no.onrender.com/get_info"
+        params1 = {'ref': ref_number}
+        response1 = session.get(api1_url, params=params1, timeout=30)
+        response1.raise_for_status()
+        data1 = response1.json()
+        job_no = data1.get("job_no")
+        company_id = data1.get("company_id")
+        if not all([job_no, company_id]):
+            return {'error': "<p>Error: 'job_no' or 'company_id' not found from the first API.</p>"}
+        last_five_digits = job_no[-5:]
 
-    # Step 2: Second API
-    api2_base_url = "http://180.92.235.190:8022/erp/production/reports/requires/bundle_wise_sewing_tracking_report_controller.php"
-    params2 = {'data': f"{company_id}**0**1**{last_five_digits}**0", 'action': 'search_list_view'}
-    response2 = session.get(api2_base_url, params=params2, timeout=120)
-    soup = BeautifulSoup(response2.text, 'html.parser')
-    first_row = soup.find('table', id='tbl_list_search').find('tbody').find('tr')
-    txt_job_id = first_row.get('onclick').split("'")[1].split('_')[1]
+        # Step 2: Second API
+        api2_base_url = "http://180.92.235.190:8022/erp/production/reports/requires/bundle_wise_sewing_tracking_report_controller.php"
+        params2 = {'data': f"{company_id}**0**1**{last_five_digits}**0", 'action': 'search_list_view'}
+        response2 = session.get(api2_base_url, params=params2, timeout=120)
+        response2.raise_for_status()
+        soup = BeautifulSoup(response2.text, 'html.parser')
+        first_row = soup.find('table', id='tbl_list_search').find('tbody').find('tr')
+        txt_job_id = first_row.get('onclick').split("'")[1].split('_')[1]
 
-    # Step 4: Generate final report
-    post_data = {
-        'action': 'report_generate', 'cbo_lc_company_id': company_id, 'cbo_working_company_id': '2',
-        'cbo_location_id': '2', 'cbo_floor_id': '0', 'cbo_buyer_id': '0', 'txt_job_no': job_no,
-        'txt_file_no': '', 'txt_int_ref': '', 'color_id': selected_color_id, 'txt_cutting_no': '',
-        'txt_bunle_no': '', 'txt_date_from': '', 'txt_date_to': '', 'txt_job_id': txt_job_id,
-        'txt_color_name': selected_color_id, 'type': '2'
-    }
-    response4 = session.post(api2_base_url, data=post_data, timeout=300)
-    soup4 = BeautifulSoup(response4.text, 'html.parser')
-    report_rows = soup4.find_all('tr', id=lambda x: x and x.startswith('tr_'))
+        # Step 4: Generate final report
+        post_data = {
+            'action': 'report_generate', 'cbo_lc_company_id': company_id, 'cbo_working_company_id': '2',
+            'cbo_location_id': '2', 'cbo_floor_id': '0', 'cbo_buyer_id': '0', 'txt_job_no': job_no,
+            'txt_file_no': '', 'txt_int_ref': '', 'color_id': selected_color_id, 'txt_cutting_no': '',
+            'txt_bunle_no': '', 'txt_date_from': '', 'txt_date_to': '', 'txt_job_id': txt_job_id,
+            'txt_color_name': selected_color_id, 'type': '2'
+        }
+        response4 = session.post(api2_base_url, data=post_data, timeout=300)
+        response4.raise_for_status()
+        soup4 = BeautifulSoup(response4.text, 'html.parser')
+        report_rows = soup4.find_all('tr', id=lambda x: x and x.startswith('tr_'))
+
+    except (requests.exceptions.RequestException, AttributeError, IndexError) as e:
+        return {'error': f"<p>An error occurred: {e}. The external site might be down or its structure may have changed.</p>"}
+
 
     if not report_rows:
-        return "<p>No data found in the report.</p>"
+        return {'error': "<p>No data found in the report.</p>"}
 
-    # Vertical card layout for results
-    results_html = '<div class="report-grid">'
+    # Initialize HTML strings for both screen and print views
+    screen_html = '<div class="report-grid">'
+    print_html_rows = ""
     overall_results_found = False
+
     for row in report_rows:
         cells = row.find_all('td')
         if len(cells) >= 24:
@@ -84,25 +97,33 @@ def fetch_report_data(ref_number, line_number, selected_color_id):
                 bundle_qty = cells[22].get_text(strip=True)
                 input_date = cells[16].get_text(strip=True)
 
-                results_html += '<div class="report-card-group">'
-                results_html += f'<div class="report-item-card"><div class="report-label">SL No</div><div class="report-value">{sl_no}</div></div>'
-                results_html += f'<div class="report-item-card"><div class="report-label">Barcode No</div><div class="report-value" style="font-size: 1.1em; font-weight: bold;">{barcode_value}</div></div>'
-                results_html += f'<div class="report-item-card"><div class="report-label">Size</div><div class="report-value">{size_value}</div></div>'
-                results_html += f'<div class="report-item-card"><div class="report-label">Bundle Qty</div><div class="report-value">{bundle_qty}</div></div>'
-                results_html += f'<div class="report-item-card"><div class="report-label">Input Date</div><div class="report-value">{input_date}</div></div>'
-                results_html += '</div>'
+                # HTML for on-screen cards
+                screen_html += '<div class="report-card-group">'
+                screen_html += f'<div class="report-item-card"><div class="report-label">SL No</div><div class="report-value">{sl_no}</div></div>'
+                screen_html += f'<div class="report-item-card"><div class="report-label">Barcode No</div><div class="report-value" style="font-size: 1.1em; font-weight: bold;">{barcode_value}</div></div>'
+                screen_html += f'<div class="report-item-card"><div class="report-label">Size</div><div class="report-value">{size_value}</div></div>'
+                screen_html += f'<div class="report-item-card"><div class="report-label">Bundle Qty</div><div class="report-value">{bundle_qty}</div></div>'
+                screen_html += f'<div class="report-item-card"><div class="report-label">Input Date</div><div class="report-value">{input_date}</div></div>'
+                screen_html += '</div>'
+                
+                # HTML for print table rows
+                print_html_rows += '<tr>'
+                print_html_rows += f'<td>{input_date}</td>'
+                print_html_rows += f'<td>{barcode_value}</td>'
+                print_html_rows += f'<td>{size_value}</td>'
+                print_html_rows += f'<td>{bundle_qty}</td>'
+                print_html_rows += '</tr>'
 
-
-    results_html += '</div>'
+    screen_html += '</div>'
 
     if not overall_results_found:
-        return f"<p>No 'No' status found for this color on line '{line_number}'.</p>"
+        return {'error': f"<p>No 'No' status found for this color on line '{line_number}'.</p>"}
     
-    return results_html
+    # Return both HTML versions
+    return {'screen_html': screen_html, 'print_html': print_html_rows}
 
 # --- HTML Templates for web pages ---
 
-# First page: For getting ref number input
 INPUT_PAGE_TEMPLATE = """
 <!doctype html>
 <html>
@@ -146,7 +167,6 @@ INPUT_PAGE_TEMPLATE = """
 </html>
 """
 
-# Second page: For selecting a color
 COLOR_SELECTION_TEMPLATE = """
 <!doctype html>
 <html>
@@ -196,7 +216,6 @@ COLOR_SELECTION_TEMPLATE = """
 </html>
 """
 
-# Page for displaying results
 RESULT_TEMPLATE = """
 <!doctype html>
 <html>
@@ -208,67 +227,74 @@ RESULT_TEMPLATE = """
     .result-container { max-width: 800px; margin: 0 auto; padding: 20px; }
     .result-container h1 { font-size: 24px; color: #2c3e50; text-align: center; margin-bottom: 20px; }
     
+    /* On-Screen Card Styles */
     .report-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
-    .report-card-group { 
-        /* UPDATED: More prominent border */
-        border: 1px solid #d1d1d1; 
-        border-radius: 8px; 
-        overflow: hidden; 
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05); 
-    }
+    .report-card-group { border: 1px solid #bbb; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
     .report-item-card { padding: 10px 15px; border-bottom: 1px solid #e9e9e9; }
     .report-card-group .report-item-card:last-child { border-bottom: none; }
     .report-label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; margin-bottom: 4px; }
     .report-value { font-size: 18px; color: #2c3e50; font-weight: 500; }
 
+    /* Action Buttons Styles */
     .action-buttons { margin-top: 25px; display: flex; justify-content: center; gap: 15px; }
     .action-buttons a, .action-buttons button { display: inline-block; text-align: center; color: #ffffff; text-decoration: none; font-weight: 600; padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; transition: transform 0.2s; }
     .try-again-link { background-color: #3498db; }
     .print-button { background-color: #9b59b6; }
     .action-buttons a:hover, .action-buttons button:hover { transform: translateY(-2px); }
     
-    /* UPDATED: Print Specific Styles for Table Layout */
+    /* --- NEW: Print Specific Styles --- */
+    .print-only { display: none; }
     @media print {
-        body, #result-page, .report-card-group {
-            box-shadow: none;
-            border: none;
-        }
-        .action-buttons, .result-container h1 {
-            display: none;
-        }
-        #printable-area {
-            /* This is where the magic happens */
-        }
-        .report-card-group {
-            display: table;
+        body { margin: 1cm; }
+        .result-container h1, .report-grid, .action-buttons { display: none; }
+        .print-only { display: block; }
+        .print-only table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 15px; /* Space between tables if multiple results */
-            page-break-inside: avoid;
+            font-size: 11pt;
         }
-        .report-item-card {
-            display: table-row;
-        }
-        .report-label, .report-value {
-            display: table-cell;
+        .print-only th, .print-only td {
+            border: 1px solid #333;
             padding: 8px;
-            border: 1px solid #888;
             text-align: left;
-            font-size: 12pt;
         }
-        .report-label {
+        .print-only th {
+            background-color: #f2f2f2;
             font-weight: bold;
-            width: 35%;
         }
     }
 </style>
 </head>
 <body>
-    <div class="result-container" id="result-page">
+    <div class="result-container">
         <h1>Report (Filtered)</h1>
-        <div id="printable-area">
-            {{ content | safe }}
+        
+        <div id="screen-report">
+            {% if content.screen_html %}
+                {{ content.screen_html | safe }}
+            {% else %}
+                {{ content.error | safe }}
+            {% endif %}
         </div>
+        
+        {% if content.print_html %}
+        <div class="print-only">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Input Date</th>
+                        <th>Barcode No</th>
+                        <th>Size</th>
+                        <th>Bundle Qty</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{ content.print_html | safe }}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
         <div class="action-buttons">
             <a href="/" class="try-again-link">Try Again</a>
             <button onclick="window.print()" class="print-button">&#128424;&#65039; Print</button>
@@ -290,7 +316,7 @@ def get_colors():
     
     session, login_message = perform_login()
     if not session:
-        return render_template_string(RESULT_TEMPLATE, content=f"<p>{login_message}</p>")
+        return render_template_string(RESULT_TEMPLATE, content={'error': f"<p>{login_message}</p>"})
 
     # Collect information from API 1 and 2
     try:
@@ -301,6 +327,8 @@ def get_colors():
         data1 = response1.json()
         job_no = data1.get("job_no")
         company_id = data1.get("company_id")
+        if not all([job_no, company_id]):
+             return render_template_string(RESULT_TEMPLATE, content={'error': "<p>Error: 'job_no' or 'company_id' not found from the first API.</p>"})
         last_five_digits = job_no[-5:]
 
         api2_base_url = "http://180.92.235.190:8022/erp/production/reports/requires/bundle_wise_sewing_tracking_report_controller.php"
@@ -328,14 +356,12 @@ def get_colors():
                     color_list.append({'id': color_id, 'name': color_name})
 
         if not color_list:
-            return render_template_string(RESULT_TEMPLATE, content="<p>No color list found.</p>")
+            return render_template_string(RESULT_TEMPLATE, content={'error': "<p>No color list found.</p>"})
 
         return render_template_string(COLOR_SELECTION_TEMPLATE, colors=color_list, ref_number=ref_number, line_number=line_number)
 
-    except requests.exceptions.RequestException as e:
-        return render_template_string(RESULT_TEMPLATE, content=f"<p>An error occurred while fetching data: {e}</p>")
-    except (AttributeError, IndexError) as e:
-        return render_template_string(RESULT_TEMPLATE, content=f"<p>Could not parse the required data from the source page. The site's structure may have changed. Error: {e}</p>")
+    except (requests.exceptions.RequestException, AttributeError, IndexError) as e:
+        return render_template_string(RESULT_TEMPLATE, content={'error': f"<p>An error occurred: {e}. The external site might be down or its structure may have changed.</p>"})
 
 
 @app.route('/generate-report', methods=['POST'])
@@ -345,13 +371,8 @@ def generate_report():
     selected_color_id = request.form['color_id']
     
     # Call the main function to generate the report
-    try:
-        report_html = fetch_report_data(ref_number, line_number, selected_color_id)
-        return render_template_string(RESULT_TEMPLATE, content=report_html)
-    except requests.exceptions.RequestException as e:
-        return render_template_string(RESULT_TEMPLATE, content=f"<p>An error occurred while generating the report: {e}</p>")
-    except (AttributeError, IndexError) as e:
-        return render_template_string(RESULT_TEMPLATE, content=f"<p>Could not parse the report data. The report's structure may have changed. Error: {e}</p>")
+    report_data = fetch_report_data(ref_number, line_number, selected_color_id)
+    return render_template_string(RESULT_TEMPLATE, content=report_data)
 
 
 if __name__ == '__main__':
