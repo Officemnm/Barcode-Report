@@ -1,282 +1,698 @@
 import requests
-import json
+import openpyxl
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 from bs4 import BeautifulSoup
-from flask import Flask, request, render_template_string
+from datetime import datetime
+from io import BytesIO
+from openpyxl.drawing.image import Image
+from PIL import Image as PILImage
 
-# lxml পার্সার ব্যবহার করা হবে, তাই এটি ইনস্টল থাকা আবশ্যক
-try:
-    import lxml
-    PARSER = 'lxml'
-except ImportError:
-    PARSER = 'html.parser'
+# --- Flask লাইব্রেরি ইম্পোর্ট ---
+from flask import Flask, request, render_template_string, send_file, flash
 
 app = Flask(__name__)
+app.secret_key = 'a-secret-key-for-flash-messages' # যেকোনো কী দিতে পারেন
 
-# --- Step 0: Function for automatic login ---
-def perform_login():
-    """Logs into the ERP system and returns a session object."""
-    LOGIN_URL = 'http://180.92.235.190:8022/erp/login.php'
-    USERNAME = 'Clothing-cutting'
-    PASSWORD = '489356'
-    
-    login_payload = {
-        'hiddenUserIP': '', 'hiddenUserMAC': '', 'txt_userid': USERNAME,
-        'txt_password': PASSWORD, 'submit': 'Login',
-    }
+# ==============================================================================
+# ফাংশন ১: ERP সিস্টেমে লগইন করার ফাংশন
+# ==============================================================================
+def get_authenticated_session(username, password):
+    login_url = 'http://103.231.177.24:8022/erp/login.php'
+    login_payload = {'txt_userid': username, 'txt_password': password, 'submit': 'Login'}
     session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
     try:
-        login_response = session.post(LOGIN_URL, data=login_payload, timeout=120)
-        login_response.raise_for_status()
-        if "logout" not in login_response.text.lower():
-            return None, "Login failed. Please check if the username or password is correct."
-        return session, "Login successful."
+        print("লগইন করার চেষ্টা করা হচ্ছে...")
+        response = session.post(login_url, data=login_payload, timeout=20)
+        if "dashboard.php" in response.url or "Invalid" not in response.text:
+            print("✅ লগইন সফল হয়েছে!")
+            return session
+        else:
+            print("❌ লগইন ব্যর্থ হয়েছে।")
+            return None
     except requests.exceptions.RequestException as e:
-        return None, f"Error during login: {e}"
+        print(f"লগইন করার সময় একটি ত্রুটি ঘটেছে: {e}")
+        return None
 
-# --- Core logic that now accepts parameters ---
-def fetch_report_data(ref_number, line_number, selected_color_id):
-    """
-    Generates the final report based on the provided inputs.
-    Returns a dictionary with HTML for both on-screen and print views, or an error.
-    """
-    session, login_message = perform_login()
-    if not session:
-        return {'error': f"<p>{login_message}</p>"}
-
+# ==============================================================================
+# ফাংশন ২: HTML থেকে ডেটা পার্স করার ফাংশন
+# ==============================================================================
+def parse_report_data(html_content):
+    all_report_data = []
     try:
-        api1_url = "https://logic-job-no.onrender.com/get_info"
-        params1 = {'ref': ref_number}
-        response1 = session.get(api1_url, params=params1, timeout=130)
-        response1.raise_for_status()
-        data1 = response1.json()
-        job_no = data1.get("job_no")
-        company_id = data1.get("company_id")
-        if not all([job_no, company_id]):
-            return {'error': "<p>Error: 'job_no' or 'company_id' not found from the first API.</p>"}
-        
-        last_five_digits = job_no[-5:]
-        api2_base_url = "http://180.92.235.190:8022/erp/production/reports/requires/bundle_wise_sewing_tracking_report_controller.php"
-        
-        params2 = {'data': f"{company_id}**0**1**{last_five_digits}**0", 'action': 'search_list_view'}
-        response2 = session.get(api2_base_url, params=params2, timeout=120)
-        response2.raise_for_status()
-        soup2 = BeautifulSoup(response2.text, PARSER)
-        del response2 # Free up memory
-        
-        txt_job_id = None
-        search_table = soup2.find('table', id='tbl_list_search')
-        if search_table and search_table.find('tbody'):
-            first_row = search_table.find('tbody').find('tr')
-            if first_row and first_row.get('onclick'):
-                txt_job_id = first_row.get('onclick').split("'")[1].split('_')[1]
-        
-        del soup2 # Free up memory
+        soup = BeautifulSoup(html_content, 'lxml')
+        header_row = soup.select_one('thead tr:nth-of-type(2)')
+        if not header_row:
+            print("ত্রুটি: রিপোর্টের টেবিল হেডার খুঁজে পাওয়া যায়নি।")
+            return None
+        all_th = header_row.find_all('th')
+        headers = [th.get_text(strip=True) for th in all_th if 'total' not in th.get_text(strip=True).lower()]
+        data_rows = soup.select('div#scroll_body table tbody tr')
+        item_blocks = []
+        current_block = []
+        for row in data_rows:
+            if row.get('bgcolor') == '#cddcdc':
+                if current_block: item_blocks.append(current_block)
+                current_block = []
+            else:
+                current_block.append(row)
+        if current_block: item_blocks.append(current_block)
+        for block in item_blocks:
+            style, color, buyer_name, gmts_qty_data, sewing_input_data, cutting_qc_data = "N/A", "N/A", "N/A", None, None, None
+            for row in block:
+                cells = row.find_all('td')
+                if len(cells) > 2:
+                    criteria_main = cells[0].get_text(strip=True)
+                    criteria_sub = cells[2].get_text(strip=True)
+                    main_lower, sub_lower = criteria_main.lower(), criteria_sub.lower()
+                    if main_lower == "style": style = cells[1].get_text(strip=True)
+                    elif main_lower == "color & gmts. item": color = cells[1].get_text(strip=True)
+                    elif "buyer" in main_lower: buyer_name = cells[1].get_text(strip=True)
+                    if sub_lower == "gmts. color /country qty": gmts_qty_data = [cell.get_text(strip=True) for cell in cells[3:len(headers)+3]]
+                    if "sewing input" in main_lower: sewing_input_data = [cell.get_text(strip=True) for cell in cells[1:len(headers)+1]]
+                    elif "sewing input" in sub_lower: sewing_input_data = [cell.get_text(strip=True) for cell in cells[3:len(headers)+3]]
+                    if "cutting qc" in main_lower and "balance" not in main_lower:
+                        cutting_qc_data = [cell.get_text(strip=True) for cell in cells[1:len(headers)+1]]
+                    elif "cutting qc" in sub_lower and "balance" not in sub_lower:
+                        cutting_qc_data = [cell.get_text(strip=True) for cell in cells[3:len(headers)+3]]
+            if gmts_qty_data:
+                plus_3_percent_data = []
+                for value in gmts_qty_data:
+                    try:
+                        new_qty = round(int(value.replace(',', '')) * 1.03)
+                        plus_3_percent_data.append(str(new_qty))
+                    except (ValueError, TypeError):
+                        plus_3_percent_data.append(value)
+                all_report_data.append({'style': style, 'buyer': buyer_name, 'color': color, 'headers': headers, 'gmts_qty': gmts_qty_data, 'plus_3_percent': plus_3_percent_data, 'sewing_input': sewing_input_data if sewing_input_data else [], 'cutting_qc': cutting_qc_data if cutting_qc_data else []})
+        return all_report_data
+    except Exception as e:
+        print(f"ডেটা পার্স করার সময় ত্রুটি হয়েছে: {e}")
+        return None
 
-        if not txt_job_id:
-            return {'error': "<p>Could not find 'txt_job_id'. The job might not exist or the page structure changed.</p>"}
+# ==============================================================================
+# ফাংশন ৩: ফরম্যাটেড এক্সেল রিপোর্ট তৈরির ফাংশন
+# ==============================================================================
+def create_formatted_excel_report(report_data, internal_ref_no=""):
+    if not report_data: return None
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Closing Report"
+   
+    # --- স্টাইলসমূহ ---
+    bold_font = Font(bold=True)
+    center_align = Alignment(horizontal='center', vertical='center')
+    left_align = Alignment(horizontal='left', vertical='center')
+    color_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    medium_border = Border(left=Side(style='medium'), right=Side(style='medium'), top=Side(style='medium'), bottom=Side(style='medium'))
+    light_brown_fill = PatternFill(start_color="FFF5E8D1", end_color="FFF5E8D1", fill_type="solid")
+    light_red_fill = PatternFill(start_color="FFFFCDD2", end_color="FFFFCDD2", fill_type="solid")
+    light_blue_fill = PatternFill(start_color="FFDDEBF7", end_color="FFDDEBF7", fill_type="solid")
+    light_green_fill = PatternFill(start_color="FFE2F0D9", end_color="FFE2F0D9", fill_type="solid")
 
-        post_data = {
-            'action': 'report_generate', 'cbo_lc_company_id': company_id, 'cbo_working_company_id': '2',
-            'cbo_location_id': '2', 'cbo_floor_id': '0', 'cbo_buyer_id': '0', 'txt_job_no': job_no,
-            'txt_file_no': '', 'txt_int_ref': '', 'color_id': selected_color_id, 'txt_cutting_no': '',
-            'txt_bunle_no': '', 'txt_date_from': '', 'txt_date_to': '', 'txt_job_id': txt_job_id,
-            'txt_color_name': selected_color_id, 'type': '2'
-        }
-        response4 = session.post(api2_base_url, data=post_data, timeout=300)
-        response4.raise_for_status()
-        soup4 = BeautifulSoup(response4.text, PARSER)
-        del response4 # Free up memory
+    NUM_COLUMNS, TABLE_START_ROW = 9, 8
+   
+    # --- প্রধান দুটি হেডার ---
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NUM_COLUMNS); ws['A1'].value = "COTTON CLOTHING BD LTD"; ws['A1'].font = Font(size=32, bold=True); ws['A1'].alignment = center_align
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=NUM_COLUMNS); ws['A2'].value = "CLOSING REPORT [ INPUT SECTION ]"; ws['A2'].font = Font(size=24, bold=False); ws['A2'].alignment = center_align
+    ws.row_dimensions[3].height = 6
 
-        report_rows = soup4.find_all('tr', id=lambda x: x and x.startswith('tr_'))
-        del soup4 # Free up memory
+    # --- সাব-হেডারসমূহ ---
+    formatted_ref_no = internal_ref_no.upper(); current_date = datetime.now().strftime("%d/%m/%Y")
+    left_sub_headers = {'A4': 'BUYER', 'B4': report_data[0].get('buyer', ''), 'A5': 'IR/IB NO', 'B5': formatted_ref_no, 'A6': 'STYLE NO', 'B6': report_data[0].get('style', '')}
+    for cell_ref, value in left_sub_headers.items():
+        cell = ws[cell_ref]; cell.value = value; cell.font = bold_font; cell.alignment = left_align; cell.border = thin_border
+    ws.merge_cells('B4:G4'); ws.merge_cells('B5:G5'); ws.merge_cells('B6:G6')
+    right_sub_headers = {'H4': 'CLOSING DATE', 'I4': current_date, 'H5': 'SHIPMENT', 'I5': 'ALL', 'H6': 'PO NO', 'I6': 'ALL'}
+    for cell_ref, value in right_sub_headers.items():
+        cell = ws[cell_ref]; cell.value = value; cell.font = bold_font; cell.alignment = left_align; cell.border = thin_border
+    for row in range(4, 7):
+        for col in range(3, 8): ws.cell(row=row, column=col).border = thin_border
+       
+    current_row = TABLE_START_ROW
+   
+    # --- ডেটা টেবিল তৈরি ---
+    for block in report_data:
+        table_headers = ["COLOUR NAME", "SIZE", "ORDER QTY 3%", "ACTUAL QTY", "CUTTING QC", "INPUT QTY", "BALANCE", "SHORT/PLUS QTY", "Percentage %"]
+        for col_idx, header in enumerate(table_headers, 1):
+            cell = ws.cell(row=current_row, column=col_idx, value=header); cell.font = bold_font; cell.alignment = center_align; cell.border = medium_border
+        current_row += 1
+        start_merge_row = current_row
+        full_color_name = block.get('color', 'N/A')
+        total_input_qty, total_order_qty_3_percent, total_actual_qty, total_short_plus_qty, total_cutting_qc, total_balance = 0, 0, 0, 0, 0, 0
+        for i, size in enumerate(block['headers']):
+            color_to_write = full_color_name if i == 0 else ""
+            actual_qty = int(block['gmts_qty'][i].replace(',', '') or 0)
+            three_percent_qty = int(block['plus_3_percent'][i].replace(',', '') or 0)
+            input_qty = int(block['sewing_input'][i].replace(',', '') or 0) if i < len(block['sewing_input']) else 0
+            cutting_qc_val = int(block.get('cutting_qc', [])[i].replace(',', '') or 0) if i < len(block.get('cutting_qc', [])) else 0
+            balance_val, short_plus_qty = cutting_qc_val - input_qty, input_qty - three_percent_qty
+            percentage_val = (short_plus_qty / three_percent_qty) * 100 if three_percent_qty != 0 else 0.0
+            percentage_str = f"{percentage_val:.2f}%"
+            total_input_qty += input_qty; total_order_qty_3_percent += three_percent_qty; total_actual_qty += actual_qty; total_short_plus_qty += short_plus_qty; total_cutting_qc += cutting_qc_val; total_balance += balance_val
+            row_data = [color_to_write, size, three_percent_qty, actual_qty, cutting_qc_val, input_qty, balance_val, short_plus_qty, percentage_str]
+            for col_idx, value in enumerate(row_data, 1):
+                cell = ws.cell(row=current_row, column=col_idx, value=value)
+                cell.border = medium_border if col_idx == 2 else thin_border
+                cell.alignment = center_align
+                if col_idx in [1, 2, 3, 6, 9]: cell.font = bold_font
+                if col_idx == 3: cell.fill = light_blue_fill
+                elif col_idx == 6: cell.fill = light_green_fill
+                if col_idx == 9 and percentage_val <= -3: cell.fill = light_red_fill
+            current_row += 1
+        end_merge_row = current_row - 1
+        if start_merge_row <= end_merge_row:
+            ws.merge_cells(start_row=start_merge_row, start_column=1, end_row=end_merge_row, end_column=1)
+            merged_cell = ws.cell(row=start_merge_row, column=1)
+            merged_cell.alignment = color_align
+            if not merged_cell.font.bold: merged_cell.font = bold_font
+        total_percentage_str = f"{(total_short_plus_qty / total_order_qty_3_percent) * 100:.2f}%" if total_order_qty_3_percent != 0 else "0.00%"
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=2)
+        totals = {"A": "TOTAL", "C": total_order_qty_3_percent, "D": total_actual_qty, "E": total_cutting_qc, "F": total_input_qty, "G": total_balance, "H": total_short_plus_qty, "I": total_percentage_str}
+        for col_letter, value in totals.items():
+            cell = ws[f"{col_letter}{current_row}"]
+            cell.value = value; cell.font = bold_font; cell.border = medium_border; cell.alignment = center_align; cell.fill = light_brown_fill
+        for col_idx in range(2, NUM_COLUMNS + 1):
+            cell = ws.cell(row=current_row, column=col_idx)
+            if not cell.value: cell.fill = light_brown_fill; cell.border = medium_border
+        current_row += 2
+       
+    image_row = current_row + 1
+   
+    # --- ছবি যোগ করার অংশ ---
+    try:
+        direct_image_url = 'https://i.ibb.co/v6bp0jQW/rockybilly-regular.webp'
+        image_response = requests.get(direct_image_url); image_response.raise_for_status()
+        original_img = PILImage.open(BytesIO(image_response.content))
+        padded_img = PILImage.new('RGBA', (original_img.width + 400, original_img.height), (0, 0, 0, 0))
+        padded_img.paste(original_img, (400, 0))
+        padded_image_io = BytesIO(); padded_img.save(padded_image_io, format='PNG')
+        img = Image(padded_image_io); aspect_ratio = padded_img.height / padded_img.width
+        img.width = 95; img.height = int(img.width * aspect_ratio)
+        ws.row_dimensions[image_row].height = img.height * 0.90; ws.add_image(img, f'A{image_row}')
+    except Exception as e:
+        print(f"ছবি যোগ করার সময় ত্রুটি: {e}")
 
-    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-        return {'error': f"<p>A network or API error occurred: {e}</p>"}
-    except (AttributeError, IndexError, TypeError, KeyError) as e:
-        return {'error': f"<p>Failed to parse data from the source page. Its structure may have changed. Error: {e}</p>"}
+    # --- স্বাক্ষর সেকশন (ফন্ট সাইজ পরিবর্তন করা হয়েছে) ---
+    signature_row = image_row + 1
+    ws.merge_cells(start_row=signature_row, start_column=1, end_row=signature_row, end_column=NUM_COLUMNS)
+    titles = ["Prepared By", "Input Incharge", "Cutting Incharge", "IE & Planning", "Sewing Manager", "Cutting Manager"]
+    signature_cell = ws.cell(row=signature_row, column=1)
+    signature_cell.value = "                  ".join(titles)
+    signature_cell.font = Font(bold=True, size=15)
+    signature_cell.alignment = Alignment(horizontal='center', vertical='center')
 
-    if not report_rows:
-        return {'error': "<p>No data rows found in the final report.</p>"}
-
-    screen_html = '<div class="report-grid">'
-    print_html_rows = ""
-    overall_results_found = False
-
-    for row in report_rows:
-        cells = row.find_all('td')
-        if len(cells) >= 24:
-            status_col_18 = cells[18].get_text(strip=True)
-            line_no_col_22_str = cells[21].get_text(strip=True)
-            
-            try:
-                if status_col_18 == 'No' and int(line_no_col_22_str) == int(line_number):
-                    overall_results_found = True
-                    sl_no = cells[0].get_text(strip=True)
-                    barcode_value = cells[1].get_text(strip=True)
-                    size_value = cells[3].get_text(strip=True)
-                    bundle_qty = cells[22].get_text(strip=True)
-                    input_date = cells[16].get_text(strip=True)
-
-                    screen_html += '<div class="report-card-group">'
-                    screen_html += f'<div class="report-item-card"><div class="report-label">SL No</div><div class="report-value">{sl_no}</div></div>'
-                    screen_html += f'<div class="report-item-card"><div class="report-label">Barcode No</div><div class="report-value" style="font-size: 1.1em; font-weight: bold;">{barcode_value}</div></div>'
-                    screen_html += f'<div class="report-item-card"><div class="report-label">Size</div><div class="report-value">{size_value}</div></div>'
-                    screen_html += f'<div class="report-item-card"><div class="report-label">Bundle Qty</div><div class="report-value">{bundle_qty}</div></div>'
-                    screen_html += f'<div class="report-item-card"><div class="report-label">Input Date</div><div class="report-value">{input_date}</div></div>'
-                    screen_html += '</div>'
-                    
-                    print_html_rows += '<tr>'
-                    print_html_rows += f'<td>{input_date}</td>'
-                    print_html_rows += f'<td>{barcode_value}</td>'
-                    print_html_rows += f'<td>{size_value}</td>'
-                    print_html_rows += f'<td>{bundle_qty}</td>'
-                    print_html_rows += '</tr>'
-            except (ValueError, IndexError):
-                continue
-
-    screen_html += '</div>'
-
-    if not overall_results_found:
-        return {'error': f"<p>No matching results found for line '{line_number}' with 'No' status.</p>"}
+    # --- ডেটা টেবিলের ফন্ট সাইজ ---
+    last_data_row = current_row - 2
+    for row in ws.iter_rows(min_row=4, max_row=last_data_row):
+        for cell in row:
+            if cell.font:
+                existing_font = cell.font
+                new_font = Font(name=existing_font.name, size=16.5, bold=existing_font.bold, italic=existing_font.italic, vertAlign=existing_font.vertAlign, underline=existing_font.underline, strike=existing_font.strike, color=existing_font.color)
+                cell.font = new_font
+   
+    # --- কলামের প্রস্থ ঠিক করা ---
+    ws.column_dimensions['A'].width = 23
+    ws.column_dimensions['B'].width = 6.5
+    ws.column_dimensions['C'].width = 20
+    ws.column_dimensions['D'].width = 17
+    ws.column_dimensions['E'].width = 17
+    ws.column_dimensions['F'].width = 15
+    ws.column_dimensions['G'].width = 13.5
+    ws.column_dimensions['H'].width = 23
+    ws.column_dimensions['I'].width = 18
+   
+    # --- পেজ সেটআপ (আপনার ছবির মতো করে পরিবর্তন করা হয়েছে) ---
+    ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0 
     
-    return {'screen_html': screen_html, 'print_html': print_html_rows}
+    # Horizontally = True, Vertically = False
+    ws.page_setup.horizontalCentered = True
+    ws.page_setup.verticalCentered = False 
 
-# --- HTML Templates and Flask Routes ---
+    # ছবির মতো করে মার্জিন সেট করা হয়েছে (মান ইঞ্চিতে)
+    ws.page_setup.left = 0.25
+    ws.page_setup.right = 0.25
+    ws.page_setup.top = 0.45
+    ws.page_setup.bottom = 0.45
+    ws.page_setup.header = 0
+    ws.page_setup.footer = 0
+   
+    # --- ফাইল সেভ করার পরিবর্তে মেমোরি থেকে রিটার্ন করা ---
+    file_stream = BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0)
+    print(f"✅ রিপোর্ট সফলভাবে মেমোরিতে তৈরি হয়েছে।")
+    return file_stream
 
-INPUT_PAGE_TEMPLATE = """
+# ==============================================================================
+# Flask ওয়েব অ্যাপ্লিকেশনের অংশ
+# ==============================================================================
+
+# --- ওয়েবপেজের জন্য HTML টেমপ্লেট ---
+HTML_TEMPLATE = """
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-<title>Report Generator</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #ffffff; margin: 0; padding: 15px; }
-    .form-container { max-width: 400px; margin: 0 auto; }
-    h1 { font-size: 24px; color: #2c3e50; text-align: center; margin-bottom: 20px; }
-    label { display: block; font-weight: 600; color: #34495e; margin-bottom: 8px; }
-    input[type="text"] { width: 100%; padding: 12px 15px; font-size: 16px; border: 1px solid #bdc3c7; border-radius: 8px; box-sizing: border-box; margin-bottom: 20px; transition: border-color 0.3s, box-shadow 0.3s; }
-    input[type="text"]:focus { outline: none; border-color: #3498db; box-shadow: 0 0 8px rgba(52, 152, 219, 0.25); }
-    input[type="submit"] { width: 100%; padding: 12px 15px; font-size: 16px; font-weight: 700; color: #ffffff; background: linear-gradient(to right, #3498db, #2980b9); border: none; border-radius: 8px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); }
-    input[type="submit"]:hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15); }
-    #loader-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(255, 255, 255, 0.8); z-index: 9999; display: none; justify-content: center; align-items: center; }
-    .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-</style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Closing Report Generator</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); text-align: center; }
+        h1 { color: #333; }
+        input[type="text"] { width: 100%; padding: 10px; margin-top: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; margin-top: 1.5rem; cursor: pointer; font-size: 1rem; }
+        button:hover { background: #0056b3; }
+        .flash { padding: 1rem; margin-top: 1rem; border-radius: 4px; background-color: #f8d7da; color: #721c24; }
+    </style>
 </head>
 <body>
-    <div id="loader-overlay"><div class="loader"></div></div>
-    <div class="form-container">
-        <h1>Final Report Generator</h1>
-        <form action="/get-colors" method="post">
-            <label for="ref_number">IB/BOOKIN NO</label>
-            <input type="text" id="ref_number" name="ref_number" required>
-            
-            <label for="line_number">LINE NO</label>
-            <input type="text" id="line_number" name="line_number" required>
-            
-            <input type="submit" value="Get Color List">
+    <div class="container">
+        <h1>Closing Report Generator</h1>
+        <form action="/generate-report" method="post">
+            <label for="ref_no">Enter Internal Ref No:</label>
+            <input type="text" id="ref_no" name="ref_no" required>
+            <button type="submit">Generate Report</button>
         </form>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash">{{ messages[0] }}</div>
+            {% endif %}
+        {% endwith %}
     </div>
-    <script>
-        document.querySelector('form').addEventListener('submit', function() {
-            document.getElementById('loader-overlay').style.display = 'flex';
-        });
-    </script>
 </body>
 </html>
 """
 
-COLOR_SELECTION_TEMPLATE = """
-<!doctype html><html><head><title>Select Color</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background-color:#fff;margin:0;padding:15px}.form-container{max-width:400px;margin:0 auto}h1{font-size:24px;color:#2c3e50;text-align:center;margin-bottom:20px}label{display:block;font-weight:600;color:#34495e;margin-bottom:8px}select{width:100%;padding:12px 15px;font-size:16px;border:1px solid #bdc3c7;border-radius:8px;box-sizing:border-box;margin-bottom:20px;-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2334495e%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 15px top 50%;background-size:.65em auto}select:focus{outline:0;border-color:#3498db;box-shadow:0 0 8px rgba(52,152,219,.25)}input[type=submit]{width:100%;padding:12px 15px;font-size:16px;font-weight:700;color:#fff;background:linear-gradient(to right,#27ae60,#229954);border:none;border-radius:8px;cursor:pointer;transition:transform .2s,box-shadow .2s;box-shadow:0 4px 10px rgba(0,0,0,.1)}input[type=submit]:hover{transform:translateY(-2px);box-shadow:0 6px 15px rgba(0,0,0,.15)}a{display:block;text-align:center;margin-top:20px;color:#3498db;text-decoration:none}#loader-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background-color:rgba(255,255,255,.8);z-index:9999;display:none;justify-content:center;align-items:center}.loader{border:8px solid #f3f3f3;border-top:8px solid #27ae60;border-radius:50%;width:60px;height:60px;animation:spin 1s linear infinite}@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style></head><body><div id="loader-overlay"><div class=loader></div></div><div class=form-container><h1>Select a Color</h1><form action=/generate-report method=post><input type=hidden name=ref_number value="{{ ref_number }}"><input type=hidden name=line_number value="{{ line_number }}"><label for=color_id>Color:</label><select name=color_id id=color_id>{% for color in colors %}<option value={{ color.id }}>{{ color.name }}</option>{% endfor %}</select><input type=submit value="Generate Report"></form><a href=/>Go Back</a></div><script>document.querySelector("form").addEventListener("submit",function(){document.getElementById("loader-overlay").style.display="flex"})</script></body></html>
-"""
-
-RESULT_TEMPLATE = """
-<!doctype html><html><head><title>Report Result</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background-color:#fff;margin:0;padding:15px}.result-container{max-width:800px;margin:0 auto;padding:20px}h1{font-size:24px;color:#2c3e50;text-align:center;margin-bottom:20px}.report-grid{display:grid;grid-template-columns:1fr;gap:20px}.report-card-group{border:1px solid #27ae60;border-radius:8px;overflow:hidden;box-shadow:0 0 12px rgba(46,204,113,.5);transition:transform .2s,box-shadow .2s}.report-card-group:hover{transform:translateY(-3px);box-shadow:0 4px 20px rgba(46,204,113,.6)}.report-item-card{padding:10px 15px;border-bottom:1px solid #e9e9e9;background-color:#fff}.report-card-group .report-item-card:last-child{border-bottom:none}.report-label{font-size:12px;color:#7f8c8d;text-transform:uppercase;margin-bottom:4px}.report-value{font-size:18px;color:#2c3e50;font-weight:500}.action-buttons{margin-top:25px;display:flex;justify-content:center;gap:15px}.action-buttons a,.action-buttons button{display:inline-block;text-align:center;color:#fff;text-decoration:none;font-weight:600;padding:10px 20px;border-radius:8px;border:none;cursor:pointer;transition:transform .2s}.try-again-link{background-color:#3498db}.print-button{background-color:#9b59b6}.action-buttons a:hover,.action-buttons button:hover{transform:translateY(-2px)}.print-only{display:none}@media print{body{margin:1cm}.result-container h1,.report-grid,.action-buttons{display:none}.print-only{display:block}.print-only h1{display:block;text-align:center;font-size:16pt;margin-bottom:20px}.print-only table{width:100%;border-collapse:collapse;font-size:11pt}.print-only th,.print-only td{border:1px solid #333;padding:8px;text-align:left}.print-only th{background-color:#f2f2f2;font-weight:700}}</style></head><body><div class=result-container><h1>Report (Filtered)</h1>{% if content.error %}<p style="text-align:center;color:red">{{ content.error | safe }}</p>{% else %}<div class=report-grid>{{ content.screen_html | safe }}</div><div class=print-only><h1>Report Data</h1><table><thead><tr><th>Input Date</th><th>Barcode No</th><th>Size</th><th>Bundle Qty</th></tr></thead><tbody>{{ content.print_html | safe }}</tbody></table></div>{% endif %}<div class=action-buttons><a href=/ class=try-again-link>Try Again</a><button onclick=window.print() class=print-button>&#128424;&#65039; Print</button></div></div></body></html>
-"""
-
-# --- Flask Routes ---
-@app.route('/', methods=['GET'])
+@app.route('/')
 def index():
-    return render_template_string(INPUT_PAGE_TEMPLATE)
-
-@app.route('/get-colors', methods=['POST'])
-def get_colors():
-    ref_number = request.form['ref_number']
-    line_number = request.form['line_number']
-    
-    session, login_message = perform_login()
-    if not session:
-        return render_template_string(RESULT_TEMPLATE, content={'error': f"<p>{login_message}</p>"})
-
-    try:
-        api1_url = "https://logic-job-no.onrender.com/get_info"
-        params1 = {'ref': ref_number}
-        response1 = session.get(api1_url, params=params1, timeout=300)
-        response1.raise_for_status()
-        data1 = response1.json()
-        job_no = data1.get("job_no")
-        company_id = data1.get("company_id")
-        if not all([job_no, company_id]):
-             return render_template_string(RESULT_TEMPLATE, content={'error': "<p>Error: 'job_no' or 'company_id' not found from the first API.</p>"})
-        
-        last_five_digits = job_no[-5:]
-
-        api2_base_url = "http://180.92.235.190:8022/erp/production/reports/requires/bundle_wise_sewing_tracking_report_controller.php"
-        params2 = {'data': f"{company_id}**0**1**{last_five_digits}**0", 'action': 'search_list_view'}
-        response2 = session.get(api2_base_url, params=params2, timeout=300)
-        response2.raise_for_status()
-        soup2 = BeautifulSoup(response2.text, PARSER)
-        del response2
-
-        txt_job_id = None
-        search_table = soup2.find('table', id='tbl_list_search')
-        if search_table and search_table.find('tbody'):
-            first_row = search_table.find('tbody').find('tr')
-            if first_row and first_row.get('onclick'):
-                txt_job_id = first_row.get('onclick').split("'")[1].split('_')[1]
-        
-        del soup2
-
-        if not txt_job_id:
-            return render_template_string(RESULT_TEMPLATE, content={'error': "<p>Could not find 'txt_job_id'. The job might not exist or the page structure changed.</p>"})
-
-        params3 = {'action': 'color_popup', 'txt_job_no': job_no, 'txt_job_id': txt_job_id}
-        response3 = session.get(api2_base_url, params=params3, timeout=200)
-        response3.raise_for_status()
-        soup3 = BeautifulSoup(response3.text, PARSER)
-        del response3
-        
-        color_list = []
-        color_table = soup3.find('table', id='list_view')
-        if color_table and color_table.find('tbody'):
-            for row in color_table.find('tbody').find_all('tr'):
-                onclick = row.get('onclick')
-                cells = row.find_all('td')
-                if onclick and len(cells) > 3:
-                    color_id = onclick.split("'")[1].split('_')[1]
-                    color_name = cells[3].get_text(strip=True)
-                    color_list.append({'id': color_id, 'name': color_name})
-        
-        del soup3
-
-        if not color_list:
-            return render_template_string(RESULT_TEMPLATE, content={'error': "<p>No color list found.</p>"})
-            
-        return render_template_string(COLOR_SELECTION_TEMPLATE, colors=color_list, ref_number=ref_number, line_number=line_number)
-
-    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-        return render_template_string(RESULT_TEMPLATE, content={'error': f"<p>A network or API error occurred: {e}</p>"})
-    except (AttributeError, IndexError, TypeError, KeyError) as e:
-        return render_template_string(RESULT_TEMPLATE, content={'error': f"<p>Failed to parse data from the source page. Its structure may have changed. Error: {e}</p>"})
+    return render_template_string(HTML_TEMPLATE)
 
 @app.route('/generate-report', methods=['POST'])
 def generate_report():
-    ref_number = request.form['ref_number']
-    line_number = request.form['line_number']
-    selected_color_id = request.form['color_id']
-    
-    report_data = fetch_report_data(ref_number, line_number, selected_color_id)
-    return render_template_string(RESULT_TEMPLATE, content=report_data)
+    internal_ref_no = request.form['ref_no']
+    if not internal_ref_no:
+        flash("Internal Ref No is required!")
+        return render_template_string(HTML_TEMPLATE)
+
+    # ERP তে লগইন করা
+    active_session = get_authenticated_session("Clothing-cutting", "489356")
+    if not active_session:
+        flash("Login failed! Check credentials.")
+        return render_template_string(HTML_TEMPLATE)
+
+    # রিপোর্ট খোঁজা
+    report_url = 'http://103.231.177.24:8022/erp/prod_planning/reports/requires/cutting_lay_production_report_controller.php'
+    payload_template = {'action': 'report_generate', 'cbo_wo_company_name': '2', 'cbo_location_name': '2', 'cbo_floor_id': '0', 'cbo_buyer_name': '0', 'txt_internal_ref_no': internal_ref_no, 'reportType': '3'}
+    found_data = None
+   
+    # এখানে 2025 সাল ব্যবহার করা হয়েছে
+    for year in ['2025', '2024']:
+        for company_id in range(1, 6):
+            payload = payload_template.copy()
+            payload['cbo_year_selection'] = year
+            payload['cbo_company_name'] = str(company_id)
+            try:
+                response = active_session.post(report_url, data=payload, timeout=30)
+                if response.status_code == 200 and "Data not Found" not in response.text:
+                    found_data = response.text
+                    break
+            except requests.exceptions.RequestException as e:
+                print(f"একটি ত্রুটি ঘটেছে: {e}")
+        if found_data:
+            break
+           
+    if not found_data:
+        flash(f"No data found for Ref No: {internal_ref_no}")
+        return render_template_string(HTML_TEMPLATE)
+
+    report_data = parse_report_data(found_data)
+    if not report_data:
+        flash(f"Failed to parse data for Ref No: {internal_ref_no}")
+        return render_template_string(HTML_TEMPLATE)
+
+    # এক্সেল ফাইল তৈরি ও পাঠানো
+    excel_file_stream = create_formatted_excel_report(report_data, internal_ref_no)
+    if excel_file_stream:
+        return send_file(
+            excel_file_stream,
+            as_attachment=True,
+            download_name=f"Closing_Report_{internal_ref_no.replace('/', '_')}.xlsx",
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    else:
+        flash("Could not generate the Excel file.")
+        return render_template_string(HTML_TEMPLATE)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000, debug=True)
+    app.run(debug=True)
+
+
+On Sat, Aug 2, 2025, 16:21 MD MEHEDI HASAN <ccbdltd.gazipura@gmail.com> wrote:
+import requests
+import openpyxl
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
+from bs4 import BeautifulSoup
+from datetime import datetime
+from io import BytesIO
+from openpyxl.drawing.image import Image
+from PIL import Image as PILImage
+
+# --- Flask লাইব্রেরি ইম্পোর্ট ---
+from flask import Flask, request, render_template_string, send_file, flash
+
+app = Flask(__name__)
+app.secret_key = 'a-secret-key-for-flash-messages' # যেকোনো কী দিতে পারেন
+
+# ==============================================================================
+# ফাংশন ১: ERP সিস্টেমে লগইন করার ফাংশন
+# ==============================================================================
+def get_authenticated_session(username, password):
+    login_url = 'http://103.231.177.24:8022/erp/login.php'
+    login_payload = {'txt_userid': username, 'txt_password': password, 'submit': 'Login'}
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    try:
+        print("লগইন করার চেষ্টা করা হচ্ছে...")
+        response = session.post(login_url, data=login_payload, timeout=20)
+        if "dashboard.php" in response.url or "Invalid" not in response.text:
+            print("✅ লগইন সফল হয়েছে!")
+            return session
+        else:
+            print("❌ লগইন ব্যর্থ হয়েছে।")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"লগইন করার সময় একটি ত্রুটি ঘটেছে: {e}")
+        return None
+
+# ==============================================================================
+# ফাংশন ২: HTML থেকে ডেটা পার্স করার ফাংশন
+# ==============================================================================
+def parse_report_data(html_content):
+    all_report_data = []
+    try:
+        soup = BeautifulSoup(html_content, 'lxml')
+        header_row = soup.select_one('thead tr:nth-of-type(2)')
+        if not header_row:
+            print("ত্রুটি: রিপোর্টের টেবিল হেডার খুঁজে পাওয়া যায়নি।")
+            return None
+        all_th = header_row.find_all('th')
+        headers = [th.get_text(strip=True) for th in all_th if 'total' not in th.get_text(strip=True).lower()]
+        data_rows = soup.select('div#scroll_body table tbody tr')
+        item_blocks = []
+        current_block = []
+        for row in data_rows:
+            if row.get('bgcolor') == '#cddcdc':
+                if current_block: item_blocks.append(current_block)
+                current_block = []
+            else:
+                current_block.append(row)
+        if current_block: item_blocks.append(current_block)
+        for block in item_blocks:
+            style, color, buyer_name, gmts_qty_data, sewing_input_data, cutting_qc_data = "N/A", "N/A", "N/A", None, None, None
+            for row in block:
+                cells = row.find_all('td')
+                if len(cells) > 2:
+                    criteria_main = cells[0].get_text(strip=True)
+                    criteria_sub = cells[2].get_text(strip=True)
+                    main_lower, sub_lower = criteria_main.lower(), criteria_sub.lower()
+                    if main_lower == "style": style = cells[1].get_text(strip=True)
+                    elif main_lower == "color & gmts. item": color = cells[1].get_text(strip=True)
+                    elif "buyer" in main_lower: buyer_name = cells[1].get_text(strip=True)
+                    if sub_lower == "gmts. color /country qty": gmts_qty_data = [cell.get_text(strip=True) for cell in cells[3:len(headers)+3]]
+                    if "sewing input" in main_lower: sewing_input_data = [cell.get_text(strip=True) for cell in cells[1:len(headers)+1]]
+                    elif "sewing input" in sub_lower: sewing_input_data = [cell.get_text(strip=True) for cell in cells[3:len(headers)+3]]
+                    if "cutting qc" in main_lower and "balance" not in main_lower:
+                        cutting_qc_data = [cell.get_text(strip=True) for cell in cells[1:len(headers)+1]]
+                    elif "cutting qc" in sub_lower and "balance" not in sub_lower:
+                        cutting_qc_data = [cell.get_text(strip=True) for cell in cells[3:len(headers)+3]]
+            if gmts_qty_data:
+                plus_3_percent_data = []
+                for value in gmts_qty_data:
+                    try:
+                        new_qty = round(int(value.replace(',', '')) * 1.03)
+                        plus_3_percent_data.append(str(new_qty))
+                    except (ValueError, TypeError):
+                        plus_3_percent_data.append(value)
+                all_report_data.append({'style': style, 'buyer': buyer_name, 'color': color, 'headers': headers, 'gmts_qty': gmts_qty_data, 'plus_3_percent': plus_3_percent_data, 'sewing_input': sewing_input_data if sewing_input_data else [], 'cutting_qc': cutting_qc_data if cutting_qc_data else []})
+        return all_report_data
+    except Exception as e:
+        print(f"ডেটা পার্স করার সময় ত্রুটি হয়েছে: {e}")
+        return None
+
+# ==============================================================================
+# ফাংশন ৩: ফরম্যাটেড এক্সেল রিপোর্ট তৈরির ফাংশন
+# ==============================================================================
+def create_formatted_excel_report(report_data, internal_ref_no=""):
+    if not report_data: return None
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Closing Report"
+   
+    # --- স্টাইলসমূহ ---
+    bold_font = Font(bold=True)
+    center_align = Alignment(horizontal='center', vertical='center')
+    left_align = Alignment(horizontal='left', vertical='center')
+    color_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    medium_border = Border(left=Side(style='medium'), right=Side(style='medium'), top=Side(style='medium'), bottom=Side(style='medium'))
+    light_brown_fill = PatternFill(start_color="FFF5E8D1", end_color="FFF5E8D1", fill_type="solid")
+    light_red_fill = PatternFill(start_color="FFFFCDD2", end_color="FFFFCDD2", fill_type="solid")
+    light_blue_fill = PatternFill(start_color="FFDDEBF7", end_color="FFDDEBF7", fill_type="solid")
+    light_green_fill = PatternFill(start_color="FFE2F0D9", end_color="FFE2F0D9", fill_type="solid")
+
+    NUM_COLUMNS, TABLE_START_ROW = 9, 8
+   
+    # --- প্রধান দুটি হেডার ---
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NUM_COLUMNS); ws['A1'].value = "COTTON CLOTHING BD LTD"; ws['A1'].font = Font(size=32, bold=True); ws['A1'].alignment = center_align
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=NUM_COLUMNS); ws['A2'].value = "CLOSING REPORT [ INPUT SECTION ]"; ws['A2'].font = Font(size=24, bold=False); ws['A2'].alignment = center_align
+    ws.row_dimensions[3].height = 6
+
+    # --- সাব-হেডারসমূহ ---
+    formatted_ref_no = internal_ref_no.upper(); current_date = datetime.now().strftime("%d/%m/%Y")
+    left_sub_headers = {'A4': 'BUYER', 'B4': report_data[0].get('buyer', ''), 'A5': 'IR/IB NO', 'B5': formatted_ref_no, 'A6': 'STYLE NO', 'B6': report_data[0].get('style', '')}
+    for cell_ref, value in left_sub_headers.items():
+        cell = ws[cell_ref]; cell.value = value; cell.font = bold_font; cell.alignment = left_align; cell.border = thin_border
+    ws.merge_cells('B4:G4'); ws.merge_cells('B5:G5'); ws.merge_cells('B6:G6')
+    right_sub_headers = {'H4': 'CLOSING DATE', 'I4': current_date, 'H5': 'SHIPMENT', 'I5': 'ALL', 'H6': 'PO NO', 'I6': 'ALL'}
+    for cell_ref, value in right_sub_headers.items():
+        cell = ws[cell_ref]; cell.value = value; cell.font = bold_font; cell.alignment = left_align; cell.border = thin_border
+    for row in range(4, 7):
+        for col in range(3, 8): ws.cell(row=row, column=col).border = thin_border
+       
+    current_row = TABLE_START_ROW
+   
+    # --- ডেটা টেবিল তৈরি ---
+    for block in report_data:
+        table_headers = ["COLOUR NAME", "SIZE", "ORDER QTY 3%", "ACTUAL QTY", "CUTTING QC", "INPUT QTY", "BALANCE", "SHORT/PLUS QTY", "Percentage %"]
+        for col_idx, header in enumerate(table_headers, 1):
+            cell = ws.cell(row=current_row, column=col_idx, value=header); cell.font = bold_font; cell.alignment = center_align; cell.border = medium_border
+        current_row += 1
+        start_merge_row = current_row
+        full_color_name = block.get('color', 'N/A')
+        total_input_qty, total_order_qty_3_percent, total_actual_qty, total_short_plus_qty, total_cutting_qc, total_balance = 0, 0, 0, 0, 0, 0
+        for i, size in enumerate(block['headers']):
+            color_to_write = full_color_name if i == 0 else ""
+            actual_qty = int(block['gmts_qty'][i].replace(',', '') or 0)
+            three_percent_qty = int(block['plus_3_percent'][i].replace(',', '') or 0)
+            input_qty = int(block['sewing_input'][i].replace(',', '') or 0) if i < len(block['sewing_input']) else 0
+            cutting_qc_val = int(block.get('cutting_qc', [])[i].replace(',', '') or 0) if i < len(block.get('cutting_qc', [])) else 0
+            balance_val, short_plus_qty = cutting_qc_val - input_qty, input_qty - three_percent_qty
+            percentage_val = (short_plus_qty / three_percent_qty) * 100 if three_percent_qty != 0 else 0.0
+            percentage_str = f"{percentage_val:.2f}%"
+            total_input_qty += input_qty; total_order_qty_3_percent += three_percent_qty; total_actual_qty += actual_qty; total_short_plus_qty += short_plus_qty; total_cutting_qc += cutting_qc_val; total_balance += balance_val
+            row_data = [color_to_write, size, three_percent_qty, actual_qty, cutting_qc_val, input_qty, balance_val, short_plus_qty, percentage_str]
+            for col_idx, value in enumerate(row_data, 1):
+                cell = ws.cell(row=current_row, column=col_idx, value=value)
+                cell.border = medium_border if col_idx == 2 else thin_border
+                cell.alignment = center_align
+                if col_idx in [1, 2, 3, 6, 9]: cell.font = bold_font
+                if col_idx == 3: cell.fill = light_blue_fill
+                elif col_idx == 6: cell.fill = light_green_fill
+                if col_idx == 9 and percentage_val <= -3: cell.fill = light_red_fill
+            current_row += 1
+        end_merge_row = current_row - 1
+        if start_merge_row <= end_merge_row:
+            ws.merge_cells(start_row=start_merge_row, start_column=1, end_row=end_merge_row, end_column=1)
+            merged_cell = ws.cell(row=start_merge_row, column=1)
+            merged_cell.alignment = color_align
+            if not merged_cell.font.bold: merged_cell.font = bold_font
+        total_percentage_str = f"{(total_short_plus_qty / total_order_qty_3_percent) * 100:.2f}%" if total_order_qty_3_percent != 0 else "0.00%"
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=2)
+        totals = {"A": "TOTAL", "C": total_order_qty_3_percent, "D": total_actual_qty, "E": total_cutting_qc, "F": total_input_qty, "G": total_balance, "H": total_short_plus_qty, "I": total_percentage_str}
+        for col_letter, value in totals.items():
+            cell = ws[f"{col_letter}{current_row}"]
+            cell.value = value; cell.font = bold_font; cell.border = medium_border; cell.alignment = center_align; cell.fill = light_brown_fill
+        for col_idx in range(2, NUM_COLUMNS + 1):
+            cell = ws.cell(row=current_row, column=col_idx)
+            if not cell.value: cell.fill = light_brown_fill; cell.border = medium_border
+        current_row += 2
+       
+    image_row = current_row + 1
+   
+    # --- ছবি যোগ করার অংশ ---
+    try:
+        direct_image_url = 'https://i.ibb.co/v6bp0jQW/rockybilly-regular.webp'
+        image_response = requests.get(direct_image_url); image_response.raise_for_status()
+        original_img = PILImage.open(BytesIO(image_response.content))
+        padded_img = PILImage.new('RGBA', (original_img.width + 400, original_img.height), (0, 0, 0, 0))
+        padded_img.paste(original_img, (400, 0))
+        padded_image_io = BytesIO(); padded_img.save(padded_image_io, format='PNG')
+        img = Image(padded_image_io); aspect_ratio = padded_img.height / padded_img.width
+        img.width = 95; img.height = int(img.width * aspect_ratio)
+        ws.row_dimensions[image_row].height = img.height * 0.90; ws.add_image(img, f'A{image_row}')
+    except Exception as e:
+        print(f"ছবি যোগ করার সময় ত্রুটি: {e}")
+
+    # --- স্বাক্ষর সেকশন (ফন্ট সাইজ পরিবর্তন করা হয়েছে) ---
+    signature_row = image_row + 1
+    ws.merge_cells(start_row=signature_row, start_column=1, end_row=signature_row, end_column=NUM_COLUMNS)
+    titles = ["Prepared By", "Input Incharge", "Cutting Incharge", "IE & Planning", "Sewing Manager", "Cutting Manager"]
+    signature_cell = ws.cell(row=signature_row, column=1)
+    signature_cell.value = "                 ".join(titles)
+    signature_cell.font = Font(bold=True, size=15) # ফন্ট সাইজ ১৪ করা হয়েছে
+    signature_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # --- ফন্ট সাইজ ১৩ করা ---
+    last_data_row = current_row - 2
+    for row in ws.iter_rows(min_row=4, max_row=last_data_row):
+        for cell in row:
+            if cell.font:
+                existing_font = cell.font
+                new_font = Font(name=existing_font.name, size=16.5, bold=existing_font.bold, italic=existing_font.italic, vertAlign=existing_font.vertAlign, underline=existing_font.underline, strike=existing_font.strike, color=existing_font.color)
+                cell.font = new_font
+   
+    # --- কলামের প্রস্থ ঠিক করা (আপনার অনুরোধ অনুযায়ী পরিবর্তন করা হয়েছে) ---
+    ws.column_dimensions['A'].width = 23
+    ws.column_dimensions['B'].width = 6.5
+    ws.column_dimensions['C'].width = 20
+    ws.column_dimensions['D'].width = 17
+    ws.column_dimensions['E'].width = 17
+    ws.column_dimensions['F'].width = 15
+    ws.column_dimensions['G'].width = 13.5
+    ws.column_dimensions['H'].width = 23
+    ws.column_dimensions['I'].width = 18
+   
+    # --- পেজ সেটআপ ---
+    ws.page_setup.orientation = ws.ORIENTATION_PORTRAIT; ws.page_setup.fitToPage = True; ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 1
+    ws.page_setup.horizontalCentered = True; ws.page_setup.verticalCentered = True
+    ws.page_setup.top = 0; ws.page_setup.left = 0.25; ws.page_setup.right = 0.25; ws.page_setup.bottom = 0
+   
+    # --- ফাইল সেভ করার পরিবর্তে মেমোরি থেকে রিটার্ন করা ---
+    file_stream = BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0)
+    print(f"✅ রিপোর্ট সফলভাবে মেমোরিতে তৈরি হয়েছে।")
+    return file_stream
+
+# ==============================================================================
+# Flask ওয়েব অ্যাপ্লিকেশনের অংশ
+# ==============================================================================
+
+# --- ওয়েবপেজের জন্য HTML টেমপ্লেট ---
+HTML_TEMPLATE = """
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Closing Report Generator</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); text-align: center; }
+        h1 { color: #333; }
+        input[type="text"] { width: 100%; padding: 10px; margin-top: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; margin-top: 1.5rem; cursor: pointer; font-size: 1rem; }
+        button:hover { background: #0056b3; }
+        .flash { padding: 1rem; margin-top: 1rem; border-radius: 4px; background-color: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Closing Report Generator</h1>
+        <form action="/generate-report" method="post">
+            <label for="ref_no">Enter Internal Ref No:</label>
+            <input type="text" id="ref_no" name="ref_no" required>
+            <button type="submit">Generate Report</button>
+        </form>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash">{{ messages[0] }}</div>
+            {% endif %}
+        {% endwith %}
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/generate-report', methods=['POST'])
+def generate_report():
+    internal_ref_no = request.form['ref_no']
+    if not internal_ref_no:
+        flash("Internal Ref No is required!")
+        return render_template_string(HTML_TEMPLATE)
+
+    # ERP তে লগইন করা
+    active_session = get_authenticated_session("Clothing-cutting", "489356")
+    if not active_session:
+        flash("Login failed! Check credentials.")
+        return render_template_string(HTML_TEMPLATE)
+
+    # রিপোর্ট খোঁজা
+    report_url = 'http://103.231.177.24:8022/erp/prod_planning/reports/requires/cutting_lay_production_report_controller.php'
+    payload_template = {'action': 'report_generate', 'cbo_wo_company_name': '2', 'cbo_location_name': '2', 'cbo_floor_id': '0', 'cbo_buyer_name': '0', 'txt_internal_ref_no': internal_ref_no, 'reportType': '3'}
+    found_data = None
+   
+    # এখানে 2025 সাল ব্যবহার করা হয়েছে, কারণ বর্তমান তারিখ 2রা আগস্ট, 2025
+    for year in ['2025', '2024']:
+        for company_id in range(1, 6):
+            payload = payload_template.copy()
+            payload['cbo_year_selection'] = year
+            payload['cbo_company_name'] = str(company_id)
+            try:
+                response = active_session.post(report_url, data=payload, timeout=30)
+                if response.status_code == 200 and "Data not Found" not in response.text:
+                    found_data = response.text
+                    break
+            except requests.exceptions.RequestException as e:
+                print(f"একটি ত্রুটি ঘটেছে: {e}")
+        if found_data:
+            break
+           
+    if not found_data:
+        flash(f"No data found for Ref No: {internal_ref_no}")
+        return render_template_string(HTML_TEMPLATE)
+
+    report_data = parse_report_data(found_data)
+    if not report_data:
+        flash(f"Failed to parse data for Ref No: {internal_ref_no}")
+        return render_template_string(HTML_TEMPLATE)
+
+    # এক্সেল ফাইল তৈরি ও পাঠানো
+    excel_file_stream = create_formatted_excel_report(report_data, internal_ref_no)
+    if excel_file_stream:
+        return send_file(
+            excel_file_stream,
+            as_attachment=True,
+            download_name=f"Closing_Report_{internal_ref_no.replace('/', '_')}.xlsx",
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    else:
+        flash("Could not generate the Excel file.")
+        return render_template_string(HTML_TEMPLATE)
+
+if __name__ == '__main__':
+    app.run(debug=True)
